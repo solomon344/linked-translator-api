@@ -1,10 +1,11 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
 COPY . .
 RUN npm install 
-RUN npm run db:migrate && npm run db:generate
+RUN npm run db:migrate
+RUN npm run db:generate
 
 COPY server.js .
 
