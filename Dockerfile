@@ -8,7 +8,7 @@ COPY /prisma ./prisma
 
 RUN ls
 # COPY prisma.config.js .
-RUN npm run db:migrate && npm run db:generate
+
 
 
 COPY server.js .
@@ -18,5 +18,5 @@ COPY server.js .
 EXPOSE 3000
 
 
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "echo DATABASE_URL=$DATABASE_URL && npx prisma migrate deploy && node server.js"]
 
