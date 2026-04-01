@@ -4,10 +4,8 @@ WORKDIR /app
 
 COPY package.json .
 COPY prisma.config.ts .
-RUN npm install --production
-
 COPY prisma .
-RUN npm run build
+RUN npm install --production
 
 COPY server.js .
 
