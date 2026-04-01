@@ -16,5 +16,5 @@ RUN npm run build
 EXPOSE 3000
 
 
-CMD ["sh", "-c", "echo DATABASE_URL=$DATABASE_URL && npm run db:migrate && node server.js"]
+CMD ["sh", "-c", "echo DATABASE_URL=$DATABASE_URL && npm run db:migrate && npm run start"]
 
