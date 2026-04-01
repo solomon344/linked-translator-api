@@ -1,22 +1,18 @@
-FROM node:24-alpine
 
+FROM node:20-alpine
+ 
 WORKDIR /app
+ 
+COPY package.json .
+COPY tsconfig.json .
+COPY prisma ./prisma
+COPY src ./src
+ 
+RUN npm install
+RUN npx prisma generate
+RUN npm run build
 
-COPY package*.json .
-RUN npm install --only=production
-COPY /prisma ./prisma
-
-RUN ls
-# COPY prisma.config.js .
-
-
-
-COPY server.js .
-
-RUN npm run db:generate
-
-
-
+ 
 EXPOSE 3000
 
 
