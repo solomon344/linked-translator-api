@@ -1,15 +1,21 @@
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
-COPY . .
+COPY package*.json .
 RUN npm install 
-RUN npm run db:generate
+COPY /prisma .
+COPY prisma.config.js .
+RUN ls
+RUN npm run db:migrate && npm run db:generate
+
 
 COPY server.js .
 
+
+
 EXPOSE 3000
 
-CMD [ "npm", "run", "db:migrate" ]
+
 CMD ["node", "server.js"]
 
