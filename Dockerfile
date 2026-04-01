@@ -18,5 +18,5 @@ COPY server.js .
 EXPOSE 3000
 
 
-CMD ["sh", "-c", "echo DATABASE_URL=$DATABASE_URL && npx prisma migrate deploy && npx prisma generate && node server.js"]
+CMD ["sh", "-c", "echo DATABASE_URL=$DATABASE_URL && npm run db:generate && npm run db:migrate && node server.js"]
 
