@@ -5,7 +5,8 @@ WORKDIR /app
 COPY package.json .
 COPY prisma.config.ts .
 COPY prisma .
-RUN npm install --production
+RUN npm install 
+RUN npm run db:migrate && npm run db:generate
 
 COPY server.js .
 

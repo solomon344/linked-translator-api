@@ -6,8 +6,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "db:migrate": "prisma migrate deploy",
-    "db:generate": "prisma generate",
-    "postinstall": "prisma migrate deploy && prisma generate"
+    "db:generate": "prisma generate"
+    
   },
   "dependencies": {
     "@prisma/client": "^7.6.0",
