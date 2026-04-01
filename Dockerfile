@@ -7,7 +7,7 @@ RUN npm install --only=production
 COPY /prisma ./prisma
 
 RUN ls
-COPY prisma.config.js .
+# COPY prisma.config.js .
 RUN npm run db:migrate && npm run db:generate
 
 
