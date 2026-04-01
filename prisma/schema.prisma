@@ -1,0 +1,17 @@
+generator client {
+  provider = "prisma-client-js"
+  output = "./generated"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model License {
+  id          String    @id @default(cuid())
+  key         String    @unique
+  email       String
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  activatedAt DateTime?
+}

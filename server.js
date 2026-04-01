@@ -1,31 +1,24 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import { PrismaClient } from '@prisma/client';
 
 const app = express();
-app.use(express.json());
-app.use(cors({ origin: '*' })); // tighten this in production if desired
+const prisma = new PrismaClient();
 
-// ── CONFIG ──────────────────────────────────────────────
+app.use(express.json());
+app.use(cors({ origin: '*' }));
+
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const DODO_WEBHOOK_SECRET = process.env.DODO_WEBHOOK_SECRET;
 const PORT = process.env.PORT || 3000;
 
-// ── SIMPLE IN-MEMORY LICENSE STORE ───────────────────────
-// Replace with a real DB (sqlite, postgres) for production
-const validLicenses = new Set();
-
-// ── TRANSLATE ENDPOINT ────────────────────────────────────
+// ── TRANSLATE ─────────────────────────────────────────────
 app.post('/translate', async (req, res) => {
   const { text } = req.body;
 
-  if (!text || text.length < 10) {
-    return res.status(400).json({ error: 'Post text too short.' });
-  }
-
-  if (text.length > 3000) {
-    return res.status(400).json({ error: 'Post text too long.' });
-  }
+  if (!text || text.length < 10) return res.status(400).json({ error: 'Post text too short.' });
+  if (text.length > 3000) return res.status(400).json({ error: 'Post text too long.' });
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -37,12 +30,12 @@ app.post('/translate', async (req, res) => {
         'X-Title': 'LinkedIn Translator'
       },
       body: JSON.stringify({
-        model: process.env.OPENROUTER_MODEL || 'google/Gemini-2.5-Flash',
+        model: 'anthropic/claude-3-5-haiku',
         max_tokens: 300,
         messages: [
           {
             role: 'system',
-            content: `You are a brutally honest LinkedIn translator. Your job is to read corporate LinkedIn posts and translate them into what the author is ACTUALLY saying — the real truth behind the professional-speak, humble-bragging, and performative vulnerability.
+            content: `You are a brutally honest LinkedIn translator. Read corporate LinkedIn posts and translate them into what the author is ACTUALLY saying — the real truth behind the professional-speak, humble-bragging, and performative vulnerability.
 
 Rules:
 - Be savage but accurate, not just mean
@@ -51,13 +44,11 @@ Rules:
 - Don't add disclaimers or caveats
 - Don't start with "Translation:" or any label
 - Just give the raw translation directly
-- Match the energy of the original post
 
 Examples:
 - "Excited to share that after much reflection, I've decided to pursue new opportunities..." → "I got laid off and I'm putting a positive spin on it before my LinkedIn connections find out."
 - "Grateful to announce I'll be joining [Big Company] as VP of Something..." → "I finally got a fancy title and I'm milking this announcement for every LinkedIn dopamine hit I can get."
-- "Leadership is about showing up even when it's hard..." → "I had a bad week and I'm pretending it's a lesson."
-`
+- "Leadership is about showing up even when it's hard..." → "I had a bad week and I'm pretending it's a lesson."`
           },
           {
             role: 'user',
@@ -69,7 +60,6 @@ Examples:
 
     const data = await response.json();
     const translation = data.choices?.[0]?.message?.content?.trim();
-
     if (!translation) throw new Error('No translation generated');
 
     res.json({ translation });
@@ -79,24 +69,37 @@ Examples:
   }
 });
 
-// ── LICENSE VERIFY ENDPOINT ───────────────────────────────
-app.post('/verify-license', (req, res) => {
+// ── VERIFY LICENSE ────────────────────────────────────────
+app.post('/verify-license', async (req, res) => {
   const { key } = req.body;
-
   if (!key) return res.status(400).json({ valid: false, message: 'No key provided.' });
 
-  const isValid = validLicenses.has(key.trim().toUpperCase());
+  try {
+    const license = await prisma.license.findUnique({
+      where: { key: key.trim().toUpperCase() }
+    });
 
-  res.json({
-    valid: isValid,
-    message: isValid ? 'License valid.' : 'Invalid license key. Check your email.'
-  });
+    if (!license || !license.active) {
+      return res.json({ valid: false, message: 'Invalid or deactivated license key.' });
+    }
+
+    // Record first activation time
+    if (!license.activatedAt) {
+      await prisma.license.update({
+        where: { key: license.key },
+        data: { activatedAt: new Date() }
+      });
+    }
+
+    res.json({ valid: true });
+  } catch (err) {
+    console.error('License verify error:', err);
+    res.status(500).json({ valid: false, message: 'Could not verify license.' });
+  }
 });
 
 // ── DODO WEBHOOK ──────────────────────────────────────────
-// Dodo calls this when a payment succeeds. We generate + store a license key.
-app.post('/webhook/dodo', express.raw({ type: 'application/json' }), (req, res) => {
-  // Verify webhook signature (check Dodo docs for exact header name)
+app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req, res) => {
   const signature = req.headers['webhook-signature'] || req.headers['x-dodo-signature'];
 
   if (DODO_WEBHOOK_SECRET && signature) {
@@ -112,29 +115,44 @@ app.post('/webhook/dodo', express.raw({ type: 'application/json' }), (req, res) 
   }
 
   const event = JSON.parse(req.body.toString());
+  console.log('Dodo webhook event:', event.type);
 
-  // Handle successful payment
   if (event.type === 'payment.succeeded' || event.type === 'order.paid') {
+    const email = event.data?.customer?.email;
     const licenseKey = generateLicenseKey();
-    validLicenses.add(licenseKey);
 
-    // TODO: email the license key to event.data.customer.email
-    // Use Resend, Nodemailer, Postmark, etc.
-    console.log(`New license issued: ${licenseKey} for ${event.data?.customer?.email}`);
+    try {
+      await prisma.license.create({
+        data: { key: licenseKey, email: email || 'unknown' }
+      });
 
-    // For now log it — hook up email sending here
+      console.log(`License created: ${licenseKey} for ${email}`);
+      // TODO: send email with licenseKey to email using Resend
+    } catch (err) {
+      console.error('Failed to create license:', err);
+    }
   }
 
   res.json({ received: true });
 });
 
-// ── GENERATE LICENSE KEY ──────────────────────────────────
+// ── HEALTH CHECK ──────────────────────────────────────────
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// ── UTILS ─────────────────────────────────────────────────
 function generateLicenseKey() {
   const part = () => crypto.randomBytes(2).toString('hex').toUpperCase();
   return `${part()}-${part()}-${part()}-${part()}`;
 }
 
-// ── START ────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`LinkedIn Translator API running on port ${PORT}`);
+// ── START ─────────────────────────────────────────────────
+async function main() {
+  await prisma.$connect();
+  console.log('Connected to database');
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}
+
+main().catch(err => {
+  console.error('Startup error:', err);
+  process.exit(1);
 });
