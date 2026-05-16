@@ -1,8 +1,11 @@
 import express, {} from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
 import { PrismaClient } from './generated/prisma/client.js'
 
+dotenv.config({ path: 'then.env' });
 
 const app = express();
 const prisma = new PrismaClient();
@@ -12,7 +15,28 @@ app.use(cors({ origin: '*' }));
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY!;
 const DODO_WEBHOOK_SECRET = process.env.DODO_WEBHOOK_SECRET!;
+const SMTP_SENDER_EMAIL = process.env.SMTP_SENDER_EMAIL;
+const SMTP_SENDER_PASSWORD = process.env.SMTP_SENDER_PASSWORD;
+const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
 const PORT = process.env.PORT || 3000;
+
+const transporter = SMTP_SENDER_EMAIL && SMTP_SENDER_PASSWORD
+  ? nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_SECURE,
+      auth: {
+        user: SMTP_SENDER_EMAIL,
+        pass: SMTP_SENDER_PASSWORD,
+      },
+    })
+  : null;
+
+if (!transporter) {
+  console.warn('SMTP is not configured. License delivery emails will be skipped.');
+}
 
 // ── TRANSLATE ─────────────────────────────────────────────
 app.post('/translate', async (req, res) => {
@@ -130,15 +154,19 @@ app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req,
   console.log('Dodo webhook event:', event.type);
 
   if (event.type === 'payment.succeeded' || event.type === 'order.paid') {
-    const email: string = event.data?.customer?.email || 'unknown';
+    const email = event.data?.customer?.email as string | undefined;
     const licenseKey = generateLicenseKey();
 
     try {
       await prisma.license.create({
-        data: { key: licenseKey, email }
+        data: { key: licenseKey, email: email ?? 'unknown' }
       });
-      console.log(`License created: ${licenseKey} for ${email}`);
-      // TODO: send email with licenseKey using Resend
+      console.log(`License created: ${licenseKey} for ${email || 'unknown'}`);
+      if (email) {
+        await sendLicenseEmail(email, licenseKey);
+      } else {
+        console.warn('No customer email found on webhook event; skipping license email.');
+      }
     } catch (err) {
       console.error('Failed to create license:', err);
     }
@@ -146,7 +174,27 @@ app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req,
 
   res.json({ received: true });
 });
+async function sendLicenseEmail(to: string, licenseKey: string) {
+  if (!transporter || !SMTP_SENDER_EMAIL) {
+    console.warn('Skipping license email because SMTP is not configured.');
+    return;
+  }
 
+  const message = {
+    from: SMTP_SENDER_EMAIL,
+    to,
+    subject: 'Your LinkedIn Translator License Key',
+    text: `Thanks for your purchase!\n\nYour license key is:\n\n${licenseKey}\n\nUse this key to verify your license.`,
+    html: `<p>Thanks for your purchase!</p><p>Your license key is:</p><h2>${licenseKey}</h2><p>Use this key to verify your license.</p>`,
+  };
+
+  try {
+    await transporter.sendMail(message);
+    console.log(`License email sent to ${to}`);
+  } catch (err) {
+    console.error('Failed to send license email:', err);
+  }
+}
 // ── HEALTH ────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
