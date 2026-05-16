@@ -3,6 +3,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import { Webhook } from 'standardwebhooks';
 import { PrismaClient } from './generated/prisma/client.js'
 
 dotenv.config({ path: 'then.env' });
@@ -37,6 +38,8 @@ const transporter = SMTP_SENDER_EMAIL && SMTP_SENDER_PASSWORD
 if (!transporter) {
   console.warn('SMTP is not configured. License delivery emails will be skipped.');
 }
+
+const webhook = new Webhook(DODO_WEBHOOK_SECRET);
 
 // ── TRANSLATE ─────────────────────────────────────────────
 app.post('/translate', async (req, res) => {
@@ -135,50 +138,50 @@ app.post('/verify-license', async (req, res) => {
 
 // ── DODO WEBHOOK ──────────────────────────────────────────
 app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req, res) => {
-  const signature = req.headers['webhook-signature'] as string || req.headers['x-dodo-signature'] as string;
-  const rawBody = Buffer.isBuffer(req.body)
-    ? req.body
-    : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body), 'utf8');
+  try {
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body.toString('utf8')
+      : typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
 
-  console.log("signature:", signature);
-  console.log("dodo webhook dignature:  ",DODO_WEBHOOK_SECRET);
-  if (DODO_WEBHOOK_SECRET && signature) {
-    const expected = crypto
-      .createHmac('sha256', DODO_WEBHOOK_SECRET)
-      .update(rawBody)
-      .digest('hex');
+    const webhookHeaders = {
+      'webhook-id': req.headers['webhook-id'] as string || '',
+      'webhook-signature': req.headers['webhook-signature'] as string || '',
+      'webhook-timestamp': req.headers['webhook-timestamp'] as string || '',
+    };
+
+    console.log('Webhook headers:', webhookHeaders);
+    console.log('Webhook body:', rawBody);
+
+    // Verify the webhook signature
+    await webhook.verify(rawBody, webhookHeaders);
     
-      console.log("expected signature:", expected);
-    if (signature !== expected) {
-      console.warn('Invalid webhook signature');
-      res.status(401).json({ error: 'Invalid signature' });
-      return;
-    }
-  }
+    const event = JSON.parse(rawBody) as any;
+    console.log('Dodo webhook event:', event.type);
 
-  const event = JSON.parse(rawBody.toString('utf8')) as any;
-  console.log('Dodo webhook event:', event.type);
-
-  if (event.type === 'payment.succeeded' || event.type === 'order.paid') {
-    const email = event.data?.customer?.email as string | undefined;
-    const licenseKey = generateLicenseKey();
-    console.log(`Creating license for ${email || 'unknown email'} with key ${licenseKey}`);
-    try {
-      await prisma.license.create({
-        data: { key: licenseKey, email: email ?? 'unknown' }
-      });
-      console.log(`License created: ${licenseKey} for ${email || 'unknown'}`);
-      if (email) {
-        await sendLicenseEmail(email, licenseKey);
-      } else {
-        console.warn('No customer email found on webhook event; skipping license email.');
+    if (event.type === 'payment.succeeded' || event.type === 'order.paid') {
+      const email = event.data?.customer?.email as string | undefined;
+      const licenseKey = generateLicenseKey();
+      console.log(`Creating license for ${email || 'unknown email'} with key ${licenseKey}`);
+      try {
+        await prisma.license.create({
+          data: { key: licenseKey, email: email ?? 'unknown' }
+        });
+        console.log(`License created: ${licenseKey} for ${email || 'unknown'}`);
+        if (email) {
+          await sendLicenseEmail(email, licenseKey);
+        } else {
+          console.warn('No customer email found on webhook event; skipping license email.');
+        }
+      } catch (err) {
+        console.error('Failed to create license:', err);
       }
-    } catch (err) {
-      console.error('Failed to create license:', err);
     }
-  }
 
-  res.json({ received: true });
+    res.json({ received: true });
+  } catch (err) {
+    console.error('Webhook verification failed:', err);
+    res.status(401).json({ error: 'Webhook verification failed' });
+  }
 });
 async function sendLicenseEmail(to: string, licenseKey: string) {
   if (!transporter || !SMTP_SENDER_EMAIL) {
