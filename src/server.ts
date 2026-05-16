@@ -136,11 +136,14 @@ app.post('/verify-license', async (req, res) => {
 // ── DODO WEBHOOK ──────────────────────────────────────────
 app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req, res) => {
   const signature = req.headers['webhook-signature'] as string || req.headers['x-dodo-signature'] as string;
+  const rawBody = Buffer.isBuffer(req.body)
+    ? req.body
+    : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body), 'utf8');
 
   if (DODO_WEBHOOK_SECRET && signature) {
     const expected = crypto
       .createHmac('sha256', DODO_WEBHOOK_SECRET)
-      .update(req.body)
+      .update(rawBody)
       .digest('hex');
 
     if (signature !== expected) {
@@ -150,7 +153,7 @@ app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req,
     }
   }
 
-  const event = JSON.parse(req.body.toString()) as any;
+  const event = JSON.parse(rawBody.toString('utf8')) as any;
   console.log('Dodo webhook event:', event.type);
 
   if (event.type === 'payment.succeeded' || event.type === 'order.paid') {
