@@ -147,7 +147,8 @@ app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req,
       .createHmac('sha256', DODO_WEBHOOK_SECRET)
       .update(rawBody)
       .digest('hex');
-
+    
+      console.log("expected signature:", expected);
     if (signature !== expected) {
       console.warn('Invalid webhook signature');
       res.status(401).json({ error: 'Invalid signature' });
