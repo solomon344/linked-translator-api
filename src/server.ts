@@ -156,7 +156,7 @@ app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req,
   if (event.type === 'payment.succeeded' || event.type === 'order.paid') {
     const email = event.data?.customer?.email as string | undefined;
     const licenseKey = generateLicenseKey();
-
+    console.log(`Creating license for ${email || 'unknown email'} with key ${licenseKey}`);
     try {
       await prisma.license.create({
         data: { key: licenseKey, email: email ?? 'unknown' }
