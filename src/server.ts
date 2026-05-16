@@ -140,6 +140,8 @@ app.post('/webhook/dodo', express.raw({ type: 'application/json' }), async (req,
     ? req.body
     : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body), 'utf8');
 
+  console.log("signature:", signature);
+  console.log("dodo webhook dignature:  ",DODO_WEBHOOK_SECRET);
   if (DODO_WEBHOOK_SECRET && signature) {
     const expected = crypto
       .createHmac('sha256', DODO_WEBHOOK_SECRET)
