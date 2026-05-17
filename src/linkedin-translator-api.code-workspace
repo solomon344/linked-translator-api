@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../truth_dept"
+		},
+		{
+			"path": "../../linkedin-translator-web"
 		}
 	],
 	"settings": {}

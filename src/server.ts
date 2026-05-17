@@ -23,6 +23,10 @@ const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
 const PORT = process.env.PORT || 3000;
 
+const MAX_FREE_USES = 5;
+const MAX_VERIFIED_FREE_USES = 10;
+const VERIFICATION_CODE_TTL_MINUTES = 15;
+
 const transporter = SMTP_SENDER_EMAIL && SMTP_SENDER_PASSWORD
   ? nodemailer.createTransport({
       host: SMTP_HOST,
@@ -43,8 +47,12 @@ const webhook = new Webhook(DODO_WEBHOOK_SECRET);
 
 // ── TRANSLATE ─────────────────────────────────────────────
 app.post('/translate', async (req, res) => {
-  const { text } = req.body as { text: string };
+  const { text, installId } = req.body as { text: string; installId: string };
 
+  if (!installId) {
+    res.status(400).json({ error: 'Missing installId.' });
+    return;
+  }
   if (!text || text.length < 10) {
     res.status(400).json({ error: 'Post text too short.' });
     return;
@@ -55,6 +63,14 @@ app.post('/translate', async (req, res) => {
   }
 
   try {
+    const trial = await getOrCreateInstallTrial(installId);
+    const allowedUses = trial.verified ? MAX_VERIFIED_FREE_USES : MAX_FREE_USES;
+
+    if (trial.freeUses >= allowedUses) {
+      res.status(403).json({ error: 'TRIAL_LIMIT_REACHED', requiresVerification: !trial.verified });
+      return;
+    }
+
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -96,7 +112,17 @@ Examples:
     const translation = data.choices?.[0]?.message?.content?.trim();
     if (!translation) throw new Error('No translation generated');
 
-    res.json({ translation });
+    const updatedTrial = await prisma.installTrial.update({
+      where: { installId },
+      data: { freeUses: { increment: 1 } }
+    });
+
+    res.json({
+      translation,
+      freeUses: updatedTrial.freeUses,
+      verified: updatedTrial.verified,
+      maxFreeUses: updatedTrial.verified ? MAX_VERIFIED_FREE_USES : MAX_FREE_USES,
+    });
   } catch (err) {
     console.error('Translation error:', err);
     res.status(500).json({ error: 'Translation failed. Try again.' });
@@ -133,6 +159,116 @@ app.post('/verify-license', async (req, res) => {
   } catch (err) {
     console.error('License verify error:', err);
     res.status(500).json({ valid: false, message: 'Could not verify license.' });
+  }
+});
+
+async function getOrCreateInstallTrial(installId: string) {
+  return prisma.installTrial.upsert({
+    where: { installId },
+    create: { installId },
+    update: {},
+  });
+}
+
+function makeVerificationCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+async function sendVerificationCodeEmail(to: string, code: string) {
+  if (!transporter || !SMTP_SENDER_EMAIL) {
+    console.warn('Skipping verification email because SMTP is not configured. Code:', code);
+    return;
+  }
+
+  const message = {
+    from: SMTP_SENDER_EMAIL,
+    to,
+    subject: 'Your LinkedIn Translator verification code',
+    text: `Your verification code is ${code}. It expires in ${VERIFICATION_CODE_TTL_MINUTES} minutes.`,
+    html: `<p>Your verification code is <strong>${code}</strong>.</p><p>It expires in ${VERIFICATION_CODE_TTL_MINUTES} minutes.</p>`,
+  };
+
+  await transporter.sendMail(message);
+}
+
+app.get('/trial-status', async (req, res) => {
+  const installId = String(req.query.installId || '');
+  if (!installId) {
+    res.status(400).json({ error: 'installId is required.' });
+    return;
+  }
+
+  try {
+    const trial = await getOrCreateInstallTrial(installId);
+    res.json({ freeUses: trial.freeUses, verified: trial.verified, maxFreeUses: trial.verified ? MAX_VERIFIED_FREE_USES : MAX_FREE_USES });
+  } catch (err) {
+    console.error('Trial status error:', err);
+    res.status(500).json({ error: 'Could not load trial status.' });
+  }
+});
+
+app.post('/start-trial-verification', async (req, res) => {
+  const { installId, email } = req.body as { installId: string; email: string };
+  if (!installId || !email) {
+    res.status(400).json({ error: 'installId and email are required.' });
+    return;
+  }
+
+  try {
+    const trial = await getOrCreateInstallTrial(installId);
+    const code = makeVerificationCode();
+    const expires = new Date(Date.now() + VERIFICATION_CODE_TTL_MINUTES * 60 * 1000);
+
+    await prisma.installTrial.update({
+      where: { installId },
+      data: {
+        email,
+        verificationCode: code,
+        codeExpires: expires,
+      }
+    });
+
+    await sendVerificationCodeEmail(email, code);
+    res.json({ success: true, message: 'Verification code sent to your email.' });
+  } catch (err) {
+    console.error('Start verification error:', err);
+    res.status(500).json({ error: 'Could not start verification.' });
+  }
+});
+
+app.post('/verify-trial-code', async (req, res) => {
+  const { installId, code } = req.body as { installId: string; code: string };
+  if (!installId || !code) {
+    res.status(400).json({ error: 'installId and code are required.' });
+    return;
+  }
+
+  try {
+    const trial = await prisma.installTrial.findUnique({ where: { installId } });
+    if (!trial || !trial.verificationCode || !trial.codeExpires) {
+      res.status(400).json({ error: 'No verification request found.' });
+      return;
+    }
+
+    if (trial.codeExpires < new Date()) {
+      res.status(400).json({ error: 'Verification code expired.' });
+      return;
+    }
+
+    if (String(code).trim() !== trial.verificationCode) {
+      res.status(400).json({ error: 'Invalid verification code.' });
+      return;
+    }
+
+    await prisma.installTrial.update({
+      where: { installId },
+      data: { verified: true, verificationCode: null, codeExpires: null },
+    });
+
+    res.json({ success: true, verified: true, maxFreeUses: MAX_VERIFIED_FREE_USES });
+  } catch (err) {
+    console.error('Verify trial code error:', err);
+    res.status(500).json({ error: 'Could not verify code.' });
   }
 });
 

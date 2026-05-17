@@ -22,3 +22,15 @@ model License {
   createdAt   DateTime  @default(now())
   activatedAt DateTime?
 }
+
+model InstallTrial {
+  id               String    @id @default(cuid())
+  installId        String    @unique
+  freeUses         Int       @default(0)
+  verified         Boolean   @default(false)
+  email            String?
+  verificationCode String?
+  codeExpires      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
